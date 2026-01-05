@@ -66,7 +66,7 @@ def mock_gmail_service(
         batch._callbacks = {}
         batch._global_callback = callback
 
-        def add_request(request: Any, request_id: str = None) -> None:
+        def add_request(request: Any, request_id: str | None = None) -> None:
             if callback:
                 batch._callbacks[request_id] = callback
 

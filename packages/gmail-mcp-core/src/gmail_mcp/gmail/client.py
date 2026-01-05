@@ -123,7 +123,9 @@ class GmailClient:
         fetched_messages: dict[str, dict[str, Any]] = {}
         batch_errors: list[tuple[str, Exception]] = []
 
-        def message_callback(request_id: str, response: dict[str, Any], exception: Exception | None) -> None:
+        def message_callback(
+            request_id: str, response: dict[str, Any], exception: Exception | None
+        ) -> None:
             if exception is None:
                 fetched_messages[request_id] = response
             else:
@@ -132,7 +134,9 @@ class GmailClient:
         batch: BatchHttpRequest = self._service.new_batch_http_request(callback=message_callback)
         for msg in messages:
             batch.add(
-                self._service.users().messages().get(
+                self._service.users()
+                .messages()
+                .get(
                     userId="me",
                     id=msg["id"],
                     format="full",
@@ -358,9 +362,7 @@ class GmailClient:
                     truncated = data[:max_base64_bytes]
                     truncated = truncated[: len(truncated) - (len(truncated) % 4)]
                     if truncated:
-                        return base64.urlsafe_b64decode(truncated).decode(
-                            "utf-8", errors="replace"
-                        )
+                        return base64.urlsafe_b64decode(truncated).decode("utf-8", errors="replace")
 
             # Recursively check nested parts
             if part.get("parts"):
