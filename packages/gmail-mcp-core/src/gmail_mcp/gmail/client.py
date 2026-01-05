@@ -1,5 +1,6 @@
 """Gmail API client wrapper."""
 
+import asyncio
 import base64
 import re
 from datetime import datetime
@@ -9,8 +10,13 @@ from typing import Any
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import Resource, build
+from googleapiclient.http import BatchHttpRequest
 
 from gmail_mcp.gmail.models import DraftReplyResult, EmailSummary
+
+# Pre-compiled regex patterns for header parsing
+_NAME_PATTERN = re.compile(r'"?([^"<]+)"?\s*<')
+_EMAIL_PATTERN = re.compile(r"<([^>]+)>")
 
 
 class GmailClient:
@@ -28,49 +34,78 @@ class GmailClient:
         self,
         max_results: int = 10,
         label_ids: list[str] | None = None,
-    ) -> tuple[list[EmailSummary], bool]:
+        page_token: str | None = None,
+    ) -> tuple[list[EmailSummary], bool, str | None]:
         """Fetch unread emails with summaries.
 
         Args:
             max_results: Maximum number of emails to return.
             label_ids: Gmail labels to filter by (default: INBOX).
+            page_token: Token for pagination (from previous call).
 
         Returns:
-            Tuple of (list of email summaries, has_more flag).
+            Tuple of (list of email summaries, has_more flag, next_page_token).
         """
+        # Run blocking API calls in thread pool to not block event loop
+        return await asyncio.to_thread(
+            self._get_unread_emails_sync, max_results, label_ids, page_token
+        )
+
+    def _get_unread_emails_sync(
+        self,
+        max_results: int,
+        label_ids: list[str] | None,
+        page_token: str | None,
+    ) -> tuple[list[EmailSummary], bool, str | None]:
+        """Synchronous implementation of get_unread_emails."""
         labels = label_ids or ["INBOX"]
 
         # List unread messages
-        results = (
-            self._service.users()
-            .messages()
-            .list(
-                userId="me",
-                q="is:unread",
-                labelIds=labels,
-                maxResults=max_results,
-            )
-            .execute()
-        )
+        list_params: dict[str, Any] = {
+            "userId": "me",
+            "q": "is:unread",
+            "labelIds": labels,
+            "maxResults": max_results,
+        }
+        if page_token:
+            list_params["pageToken"] = page_token
+
+        results = self._service.users().messages().list(**list_params).execute()
 
         messages = results.get("messages", [])
         has_more = "nextPageToken" in results
+        next_page_token = results.get("nextPageToken")
 
-        emails: list[EmailSummary] = []
+        if not messages:
+            return [], has_more, next_page_token
+
+        # Use batch request to fetch all messages in 1-2 API calls (vs N+1)
+        # Gmail batch API supports up to 100 requests per batch
+        fetched_messages: dict[str, dict[str, Any]] = {}
+
+        def message_callback(request_id: str, response: dict[str, Any], exception: Exception | None) -> None:
+            if exception is None:
+                fetched_messages[request_id] = response
+
+        batch: BatchHttpRequest = self._service.new_batch_http_request(callback=message_callback)
         for msg in messages:
-            full_msg = (
-                self._service.users()
-                .messages()
-                .get(
+            batch.add(
+                self._service.users().messages().get(
                     userId="me",
                     id=msg["id"],
                     format="full",
-                )
-                .execute()
+                ),
+                request_id=msg["id"],
             )
-            emails.append(self._parse_message(full_msg))
+        batch.execute()
 
-        return emails, has_more
+        # Parse messages in original order
+        emails: list[EmailSummary] = []
+        for msg in messages:
+            if msg["id"] in fetched_messages:
+                emails.append(self._parse_message(fetched_messages[msg["id"]]))
+
+        return emails, has_more, next_page_token
 
     async def create_draft_reply(
         self,
@@ -98,6 +133,25 @@ class GmailClient:
         Returns:
             DraftReplyResult with draft details.
         """
+        # Run blocking API calls in thread pool to not block event loop
+        return await asyncio.to_thread(
+            self._create_draft_reply_sync,
+            thread_id,
+            original_message_id,
+            reply_body,
+            original_subject,
+            to_address,
+        )
+
+    def _create_draft_reply_sync(
+        self,
+        thread_id: str,
+        original_message_id: str,
+        reply_body: str,
+        original_subject: str,
+        to_address: str,
+    ) -> DraftReplyResult:
+        """Synchronous implementation of create_draft_reply."""
         # Get original message for Message-ID header
         original = (
             self._service.users()
@@ -138,7 +192,6 @@ class GmailClient:
             draft_id=draft["id"],
             thread_id=thread_id,
             message_id=draft["message"]["id"],
-            success=True,
         )
 
     def _parse_message(self, msg: dict[str, Any]) -> EmailSummary:
@@ -193,7 +246,7 @@ class GmailClient:
             Display name or None.
         """
         # Format: "Display Name <email@example.com>" or just "email@example.com"
-        match = re.match(r'"?([^"<]+)"?\s*<', from_header)
+        match = _NAME_PATTERN.match(from_header)
         if match:
             return match.group(1).strip()
         return None
@@ -207,7 +260,7 @@ class GmailClient:
         Returns:
             Email address.
         """
-        match = re.search(r"<([^>]+)>", from_header)
+        match = _EMAIL_PATTERN.search(from_header)
         if match:
             return match.group(1)
         # If no angle brackets, assume the whole thing is an email

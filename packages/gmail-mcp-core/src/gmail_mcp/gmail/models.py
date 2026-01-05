@@ -26,6 +26,9 @@ class UnreadEmailsResult(BaseModel):
     emails: list[EmailSummary] = Field(description="List of unread email summaries")
     total_count: int = Field(description="Number of emails returned")
     has_more: bool = Field(description="Whether more unread emails exist beyond the limit")
+    next_page_token: str | None = Field(
+        default=None, description="Token to fetch next page of results (pass to page_token parameter)"
+    )
 
 
 class DraftReplyResult(BaseModel):
@@ -34,4 +37,3 @@ class DraftReplyResult(BaseModel):
     draft_id: str = Field(description="Created draft ID")
     thread_id: str = Field(description="Thread the draft belongs to")
     message_id: str = Field(description="Message ID of the draft")
-    success: bool = Field(default=True, description="Whether the operation succeeded")

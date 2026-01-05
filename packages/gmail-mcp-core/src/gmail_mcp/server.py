@@ -3,7 +3,7 @@
 from typing import Annotated
 
 from fastmcp import FastMCP
-from pydantic import Field
+from pydantic import EmailStr, Field
 
 from gmail_mcp.config import get_settings
 from gmail_mcp.gmail.auth import get_credentials
@@ -56,6 +56,13 @@ async def get_unread_emails(
             description="Gmail labels to filter by (default: INBOX). Example: ['INBOX', 'IMPORTANT']",
         ),
     ] = None,
+    page_token: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Pagination token from previous call's next_page_token to fetch next page",
+        ),
+    ] = None,
 ) -> UnreadEmailsResult:
     """Fetch unread emails from Gmail.
 
@@ -67,14 +74,18 @@ async def get_unread_emails(
     - thread_id: Thread ID (use with create_draft_reply)
 
     Use thread_id and email_id with create_draft_reply to respond to emails.
+    Use next_page_token with page_token parameter to fetch additional pages.
     """
     client = get_gmail_client()
-    emails, has_more = await client.get_unread_emails(max_results=max_results, label_ids=labels)
+    emails, has_more, next_page_token = await client.get_unread_emails(
+        max_results=max_results, label_ids=labels, page_token=page_token
+    )
 
     return UnreadEmailsResult(
         emails=emails,
         total_count=len(emails),
         has_more=has_more,
+        next_page_token=next_page_token,
     )
 
 
@@ -110,7 +121,7 @@ async def create_draft_reply(
         ),
     ],
     to_address: Annotated[
-        str,
+        EmailStr,
         Field(description="Email address to send the reply to (usually the original sender)"),
     ],
 ) -> DraftReplyResult:
