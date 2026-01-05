@@ -93,18 +93,22 @@ class TestDraftReplyResult:
             draft_id="draft123",
             thread_id="thread456",
             message_id="msg789",
-            success=True,
         )
 
         assert result.draft_id == "draft123"
-        assert result.success is True
+        assert result.thread_id == "thread456"
+        assert result.message_id == "msg789"
 
-    def test_default_success(self) -> None:
-        """Test success defaults to True."""
+    def test_all_fields_present(self) -> None:
+        """Test all fields are present and accessible."""
         result = DraftReplyResult(
             draft_id="draft123",
             thread_id="thread456",
             message_id="msg789",
         )
 
-        assert result.success is True
+        # Verify model can be serialized
+        data = result.model_dump()
+        assert "draft_id" in data
+        assert "thread_id" in data
+        assert "message_id" in data

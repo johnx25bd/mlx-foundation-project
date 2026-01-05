@@ -11,16 +11,17 @@ class TestGmailClient:
     @pytest.mark.asyncio
     async def test_get_unread_emails_returns_list(self, gmail_client: GmailClient) -> None:
         """Test get_unread_emails returns list of emails."""
-        emails, has_more = await gmail_client.get_unread_emails(max_results=10)
+        emails, has_more, next_page_token = await gmail_client.get_unread_emails(max_results=10)
 
         assert isinstance(emails, list)
         assert len(emails) == 2  # Mock returns 2 messages
         assert has_more is False
+        assert next_page_token is None
 
     @pytest.mark.asyncio
     async def test_get_unread_emails_parses_sender(self, gmail_client: GmailClient) -> None:
         """Test get_unread_emails correctly parses sender."""
-        emails, _ = await gmail_client.get_unread_emails()
+        emails, _, _ = await gmail_client.get_unread_emails()
 
         assert emails[0].sender == "john@example.com"
         assert emails[0].sender_name == "John Doe"
@@ -28,14 +29,14 @@ class TestGmailClient:
     @pytest.mark.asyncio
     async def test_get_unread_emails_parses_subject(self, gmail_client: GmailClient) -> None:
         """Test get_unread_emails correctly parses subject."""
-        emails, _ = await gmail_client.get_unread_emails()
+        emails, _, _ = await gmail_client.get_unread_emails()
 
         assert emails[0].subject == "Test Email Subject"
 
     @pytest.mark.asyncio
     async def test_get_unread_emails_includes_ids(self, gmail_client: GmailClient) -> None:
         """Test get_unread_emails includes email and thread IDs."""
-        emails, _ = await gmail_client.get_unread_emails()
+        emails, _, _ = await gmail_client.get_unread_emails()
 
         assert emails[0].email_id == "msg123"
         assert emails[0].thread_id == "thread456"
@@ -53,7 +54,7 @@ class TestGmailClient:
 
         assert result.draft_id == "draft123"
         assert result.thread_id == "thread456"
-        assert result.success is True
+        assert result.message_id == "draftmsg456"
 
 
 class TestGmailClientParsing:
