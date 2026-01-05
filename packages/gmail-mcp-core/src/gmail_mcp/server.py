@@ -13,22 +13,40 @@ from gmail_mcp.gmail.models import DraftReplyResult, UnreadEmailsResult
 # Initialize FastMCP server
 mcp = FastMCP("Gmail MCP Server")
 
-# Lazy-initialized Gmail client
-_gmail_client: GmailClient | None = None
+
+class GmailClientManager:
+    """Manages GmailClient lifecycle with lazy initialization.
+
+    Encapsulates client state to avoid module-level globals and enable testing.
+    """
+
+    def __init__(self) -> None:
+        self._client: GmailClient | None = None
+
+    def get_client(self) -> GmailClient:
+        """Get or create Gmail client with credentials."""
+        if self._client is None:
+            settings = get_settings()
+            credentials = get_credentials(settings.credentials_path, settings.token_path)
+            self._client = GmailClient(credentials)
+        return self._client
+
+    def reset(self) -> None:
+        """Reset client instance (useful for testing)."""
+        self._client = None
+
+
+# Single instance for the server - can be replaced in tests
+_client_manager = GmailClientManager()
 
 
 def get_gmail_client() -> GmailClient:
-    """Get or create Gmail client with credentials.
+    """Get Gmail client instance.
 
     Returns:
         Authenticated GmailClient instance.
     """
-    global _gmail_client
-    if _gmail_client is None:
-        settings = get_settings()
-        credentials = get_credentials(settings.credentials_path, settings.token_path)
-        _gmail_client = GmailClient(credentials)
-    return _gmail_client
+    return _client_manager.get_client()
 
 
 @mcp.tool(
