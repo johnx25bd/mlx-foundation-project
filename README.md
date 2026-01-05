@@ -20,9 +20,9 @@ A production-ready [Model Context Protocol](https://modelcontextprotocol.io/) se
 ### Installation
 
 ```bash
-git clone https://github.com/your-org/gmail-mcp-server.git
-cd gmail-mcp-server
-uv sync
+git clone https://github.com/johnx25bd/mlx-foundation-project.git
+cd mlx-foundation-project
+uv sync --all-packages
 ```
 
 ### OAuth Setup
@@ -70,7 +70,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
       "args": [
         "run",
         "--directory",
-        "/path/to/gmail-mcp-server",
+        "/path/to/mlx-foundation-project",
         "gmail-mcp"
       ],
       "env": {
@@ -149,7 +149,7 @@ uv run ruff format .
 ## Project Structure
 
 ```
-gmail-mcp-server/
+mlx-foundation-project/
 ├── packages/
 │   └── gmail-mcp-core/          # Core MCP server
 │       ├── src/gmail_mcp/
