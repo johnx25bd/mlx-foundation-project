@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "gmail": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/path/to/mlx-foundation-project",
+        "gmail-mcp"
+      ],
+      "env": {
+        "GMAIL_MCP_CREDENTIALS_PATH": "~/.config/gmail-mcp/credentials.json",
+        "GMAIL_MCP_TOKEN_PATH": "~/.config/gmail-mcp/token.json"
+      }
+    }
+  }
+}
