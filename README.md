@@ -1,0 +1,179 @@
+# Gmail MCP Server
+
+A production-ready [Model Context Protocol](https://modelcontextprotocol.io/) server for Gmail integration. Read unread emails and create draft replies using AI assistants like Claude.
+
+## Features
+
+- **Read Unread Emails** - Fetch emails with sender, subject, body preview, and thread information
+- **Create Draft Replies** - Compose properly threaded draft responses
+- **Secure Authentication** - OAuth 2.0 with minimal scopes (read-only + compose)
+- **Claude Desktop Integration** - Ready to use with Claude Desktop app
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) package manager
+- Google Cloud project with Gmail API enabled
+
+### Installation
+
+```bash
+git clone https://github.com/your-org/gmail-mcp-server.git
+cd gmail-mcp-server
+uv sync
+```
+
+### OAuth Setup
+
+1. **Create Google Cloud Project**
+   - Go to [Google Cloud Console](https://console.cloud.google.com)
+   - Create a new project or select existing
+
+2. **Enable Gmail API**
+   - Navigate to APIs & Services > Library
+   - Search for "Gmail API" and enable it
+
+3. **Configure OAuth Consent Screen**
+   - Go to APIs & Services > OAuth consent screen
+   - Select "External" user type
+   - Fill in app name and your email
+   - Add scopes: `gmail.readonly`, `gmail.compose`
+   - Add your email as a test user
+
+4. **Create OAuth Credentials**
+   - Go to APIs & Services > Credentials
+   - Click "Create Credentials" > "OAuth client ID"
+   - Select "Desktop app" as application type
+   - Download the JSON file
+
+5. **Run Setup Script**
+   ```bash
+   # Save credentials to config directory
+   mkdir -p ~/.config/gmail-mcp
+   cp ~/Downloads/client_secret_*.json ~/.config/gmail-mcp/credentials.json
+
+   # Run OAuth flow
+   python scripts/setup-oauth.py
+   ```
+
+### Claude Desktop Configuration
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "gmail": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/path/to/gmail-mcp-server",
+        "gmail-mcp"
+      ],
+      "env": {
+        "GMAIL_MCP_CREDENTIALS_PATH": "~/.config/gmail-mcp/credentials.json",
+        "GMAIL_MCP_TOKEN_PATH": "~/.config/gmail-mcp/token.json"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop to load the server.
+
+## Tools
+
+### get_unread_emails
+
+Retrieve unread emails from Gmail inbox.
+
+**Parameters:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `max_results` | int | 10 | Maximum emails to return (1-50) |
+| `labels` | list[str] | ["INBOX"] | Gmail labels to filter by |
+
+**Returns:**
+- `emails` - List of email summaries with sender, subject, body preview, email_id, thread_id
+- `total_count` - Number of emails returned
+- `has_more` - Whether more unread emails exist
+
+**Example prompt:**
+> "Show me my unread emails"
+
+### create_draft_reply
+
+Create a draft reply to an email thread.
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `thread_id` | str | Thread ID from get_unread_emails |
+| `original_message_id` | str | Message ID (email_id) to reply to |
+| `reply_body` | str | Plain text body of the reply |
+| `original_subject` | str | Subject of original email |
+| `to_address` | str | Recipient email address |
+
+**Returns:**
+- `draft_id` - Created draft ID
+- `thread_id` - Thread the draft belongs to
+- `success` - Whether operation succeeded
+
+**Example prompt:**
+> "Draft a reply to the email from John thanking him for the update"
+
+## Development
+
+### Run Tests
+
+```bash
+uv run pytest
+```
+
+### Type Check
+
+```bash
+uv run mypy packages/
+```
+
+### Lint
+
+```bash
+uv run ruff check .
+uv run ruff format .
+```
+
+## Project Structure
+
+```
+gmail-mcp-server/
+├── packages/
+│   └── gmail-mcp-core/          # Core MCP server
+│       ├── src/gmail_mcp/
+│       │   ├── server.py        # FastMCP server + tools
+│       │   ├── config.py        # Configuration
+│       │   └── gmail/
+│       │       ├── auth.py      # OAuth2 flow
+│       │       ├── client.py    # Gmail API wrapper
+│       │       └── models.py    # Pydantic models
+│       └── tests/
+├── examples/
+│   └── claude_desktop_config.json
+├── scripts/
+│   └── setup-oauth.py
+└── pyproject.toml               # UV workspace config
+```
+
+## Security
+
+- OAuth credentials are stored locally in `~/.config/gmail-mcp/`
+- Only minimal scopes requested: `gmail.readonly` + `gmail.compose`
+- Tokens are automatically refreshed
+- Never commit credentials or tokens to version control
+
+## License
+
+MIT
