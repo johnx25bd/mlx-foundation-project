@@ -1,0 +1,22 @@
+[project]
+name = "kb-plugin"
+version = "0.1.0"
+description = "Knowledge base context provider plugin for MCP servers"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+    "fastmcp>=2.0",
+    "httpx>=0.27",
+    "mcp-plugins",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kb_plugin"]
+
+[tool.uv.sources]
+mcp-plugins = { workspace = true }
