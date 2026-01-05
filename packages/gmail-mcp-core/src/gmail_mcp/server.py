@@ -11,11 +11,7 @@ from gmail_mcp.gmail.client import GmailClient
 from gmail_mcp.gmail.models import DraftReplyResult, UnreadEmailsResult
 
 # Initialize FastMCP server
-mcp = FastMCP(
-    name="Gmail MCP Server",
-    version="0.1.0",
-    description="MCP server for Gmail - read unread emails and create draft replies",
-)
+mcp = FastMCP("Gmail MCP Server")
 
 # Lazy-initialized Gmail client
 _gmail_client: GmailClient | None = None

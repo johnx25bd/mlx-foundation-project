@@ -27,36 +27,60 @@ uv sync --all-packages
 
 ### OAuth Setup
 
-1. **Create Google Cloud Project**
-   - Go to [Google Cloud Console](https://console.cloud.google.com)
-   - Create a new project or select existing
+#### 1. Create Google Cloud Project
+- Go to [Google Cloud Console](https://console.cloud.google.com)
+- Click the project dropdown (top-left) → **New Project**
+- Name it (e.g., `gmail-mcp-server`) → **Create**
+- Select your new project from the dropdown
 
-2. **Enable Gmail API**
-   - Navigate to APIs & Services > Library
-   - Search for "Gmail API" and enable it
+#### 2. Enable Gmail API
+- Go to [APIs & Services → Library](https://console.cloud.google.com/apis/library)
+- Search for **Gmail API**
+- Click it → **Enable**
 
-3. **Configure OAuth Consent Screen**
-   - Go to APIs & Services > OAuth consent screen
-   - Select "External" user type
-   - Fill in app name and your email
-   - Add scopes: `gmail.readonly`, `gmail.compose`
-   - Add your email as a test user
+#### 3. Configure OAuth (Google Auth Platform)
+Go to [Google Auth Platform](https://console.cloud.google.com/auth/overview) and configure each section in the left sidebar:
 
-4. **Create OAuth Credentials**
-   - Go to APIs & Services > Credentials
-   - Click "Create Credentials" > "OAuth client ID"
-   - Select "Desktop app" as application type
-   - Download the JSON file
+**Branding:**
+- App name: `Gmail MCP Server`
+- User support email: your email
+- Developer contact email: your email
+- **Save**
 
-5. **Run Setup Script**
-   ```bash
-   # Save credentials to config directory
-   mkdir -p ~/.config/gmail-mcp
-   cp ~/Downloads/client_secret_*.json ~/.config/gmail-mcp/credentials.json
+**Audience:**
+- Select **External**
+- **Save**
+- Scroll down and click **Add users**
+- Add your Gmail address as a test user
+- **Save**
 
-   # Run OAuth flow
-   python scripts/setup-oauth.py
-   ```
+**Data Access:**
+- Click **Add or remove scopes**
+- Add these scopes (paste into filter or find manually):
+  - `https://www.googleapis.com/auth/gmail.readonly`
+  - `https://www.googleapis.com/auth/gmail.compose`
+- **Update** → **Save**
+
+**Clients:**
+- Click **Create Client**
+- Application type: **Desktop app**
+- Name: `Gmail MCP Desktop`
+- **Create**
+- Click **Download** (down arrow icon) to get the JSON file
+
+#### 4. Save Credentials and Authenticate
+```bash
+# Create config directory
+mkdir -p ~/.config/gmail-mcp
+
+# Move and rename the downloaded credentials
+mv ~/Downloads/client_secret_*.json ~/.config/gmail-mcp/credentials.json
+
+# Run OAuth flow (opens browser for authorization)
+uv run python scripts/setup-oauth.py
+```
+
+Sign in with your Google account when the browser opens and grant the requested permissions. You'll see "Authentication successful!" when complete.
 
 ### Claude Desktop Configuration
 
