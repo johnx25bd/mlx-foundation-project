@@ -9,6 +9,17 @@ A production-ready [Model Context Protocol](https://modelcontextprotocol.io/) se
 - **Secure Authentication** - OAuth 2.0 with minimal scopes (read-only + compose)
 - **Claude Desktop Integration** - Ready to use with Claude Desktop app
 
+## Demo
+
+### MCP Server Connected
+![Tool connector showing Gmail MCP server](docs/screenshots/tool-connector.png)
+
+### Reading Unread Emails
+![Claude reading unread emails](docs/screenshots/read-emails.png)
+
+### Creating a Draft Reply
+![Claude creating a draft reply](docs/screenshots/create-draft.png)
+
 ## Quick Start
 
 ### Prerequisites
@@ -119,11 +130,13 @@ Retrieve unread emails from Gmail inbox.
 |------|------|---------|-------------|
 | `max_results` | int | 10 | Maximum emails to return (1-50) |
 | `labels` | list[str] | ["INBOX"] | Gmail labels to filter by |
+| `page_token` | str | None | Pagination token from previous call |
 
 **Returns:**
 - `emails` - List of email summaries with sender, subject, body preview, email_id, thread_id
 - `total_count` - Number of emails returned
 - `has_more` - Whether more unread emails exist
+- `next_page_token` - Token to fetch next page (pass to `page_token`)
 
 **Example prompt:**
 > "Show me my unread emails"
@@ -144,7 +157,7 @@ Create a draft reply to an email thread.
 **Returns:**
 - `draft_id` - Created draft ID
 - `thread_id` - Thread the draft belongs to
-- `success` - Whether operation succeeded
+- `message_id` - Message ID of the draft
 
 **Example prompt:**
 > "Draft a reply to the email from John thanking him for the update"
@@ -175,21 +188,38 @@ uv run ruff format .
 ```
 mlx-foundation-project/
 ├── packages/
-│   └── gmail-mcp-core/          # Core MCP server
-│       ├── src/gmail_mcp/
-│       │   ├── server.py        # FastMCP server + tools
-│       │   ├── config.py        # Configuration
-│       │   └── gmail/
-│       │       ├── auth.py      # OAuth2 flow
-│       │       ├── client.py    # Gmail API wrapper
-│       │       └── models.py    # Pydantic models
-│       └── tests/
+│   ├── gmail-mcp-core/          # Core MCP server
+│   │   ├── src/gmail_mcp/
+│   │   │   ├── server.py        # FastMCP server + tools
+│   │   │   ├── config.py        # Configuration
+│   │   │   └── gmail/
+│   │   │       ├── auth.py      # OAuth2 flow
+│   │   │       ├── client.py    # Gmail API wrapper
+│   │   │       ├── models.py    # Pydantic models
+│   │   │       └── exceptions.py # Domain exceptions
+│   │   └── tests/
+│   └── plugin-core/             # Plugin framework (extensibility)
+│       └── src/mcp_plugins/
+│           ├── base.py          # MCPPlugin abstract class
+│           └── registry.py      # Plugin discovery & lifecycle
+├── plugins/
+│   └── knowledge-base/          # Knowledge base plugin (not yet implemented)
 ├── examples/
 │   └── claude_desktop_config.json
 ├── scripts/
 │   └── setup-oauth.py
 └── pyproject.toml               # UV workspace config
 ```
+
+## Plugin Architecture
+
+The project includes a plugin framework for extending the MCP server with additional capabilities. The plugin system provides:
+
+- **MCPPlugin base class** - Abstract interface for creating plugins
+- **PluginRegistry** - Central discovery and lifecycle management
+- **Lifecycle hooks** - `initialize()`, `register()`, `shutdown()`
+
+> **Note:** The plugin system is scaffolded but not yet integrated with the main server. The knowledge-base plugin is planned but not implemented. This architecture enables future extensibility for features like fetching documentation from GitHub, local files, or web URLs.
 
 ## Security
 

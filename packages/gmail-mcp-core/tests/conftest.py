@@ -53,6 +53,29 @@ def mock_gmail_service(
     # Mock messages().get() - return sample message for any ID
     service.users().messages().get().execute.return_value = sample_message
 
+    # Mock batch requests - execute callback immediately with sample data
+    def mock_batch_execute(batch_request: MagicMock) -> None:
+        # Call the callback for each added request
+        if hasattr(batch_request, "_callbacks"):
+            for request_id, callback in batch_request._callbacks.items():
+                callback(request_id, sample_message, None)
+
+    # Track batch request additions
+    def create_batch_request(callback: Any = None) -> MagicMock:
+        batch = MagicMock()
+        batch._callbacks = {}
+        batch._global_callback = callback
+
+        def add_request(request: Any, request_id: str | None = None) -> None:
+            if callback:
+                batch._callbacks[request_id] = callback
+
+        batch.add = add_request
+        batch.execute = lambda: mock_batch_execute(batch)
+        return batch
+
+    service.new_batch_http_request = create_batch_request
+
     # Mock drafts().create()
     service.users().drafts().create().execute.return_value = {
         "id": "draft123",
@@ -65,9 +88,6 @@ def mock_gmail_service(
 @pytest.fixture
 def gmail_client(mock_gmail_service: MagicMock) -> GmailClient:
     """Gmail client with mocked service."""
-    with patch("gmail_mcp.gmail.client.build") as mock_build:
-        mock_build.return_value = mock_gmail_service
+    with patch("gmail_mcp.gmail.client.build", return_value=mock_gmail_service):
         client = GmailClient(MagicMock())  # Mock credentials
-        # Replace the service with our mock
-        client._service = mock_gmail_service
         return client

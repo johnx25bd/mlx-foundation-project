@@ -70,7 +70,21 @@ class PluginRegistry:
                 plugin.register(mcp)
 
     @classmethod
+    def unload_all(cls) -> None:
+        """Shutdown all loaded plugin instances.
+
+        Calls shutdown() on each plugin instance to allow cleanup.
+        Should be called when the server is shutting down.
+        """
+        for plugin in cls._instances.values():
+            plugin.shutdown()
+
+    @classmethod
     def clear(cls) -> None:
-        """Clear all registered plugins (useful for testing)."""
+        """Clear all registered plugins (useful for testing).
+
+        Note: Calls unload_all() first to ensure proper cleanup.
+        """
+        cls.unload_all()
         cls._plugins.clear()
         cls._instances.clear()

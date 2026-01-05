@@ -3,7 +3,7 @@
 from typing import Annotated
 
 from fastmcp import FastMCP
-from pydantic import Field
+from pydantic import EmailStr, Field
 
 from gmail_mcp.config import get_settings
 from gmail_mcp.gmail.auth import get_credentials
@@ -13,22 +13,40 @@ from gmail_mcp.gmail.models import DraftReplyResult, UnreadEmailsResult
 # Initialize FastMCP server
 mcp = FastMCP("Gmail MCP Server")
 
-# Lazy-initialized Gmail client
-_gmail_client: GmailClient | None = None
+
+class GmailClientManager:
+    """Manages GmailClient lifecycle with lazy initialization.
+
+    Encapsulates client state to avoid module-level globals and enable testing.
+    """
+
+    def __init__(self) -> None:
+        self._client: GmailClient | None = None
+
+    def get_client(self) -> GmailClient:
+        """Get or create Gmail client with credentials."""
+        if self._client is None:
+            settings = get_settings()
+            credentials = get_credentials(settings.credentials_path, settings.token_path)
+            self._client = GmailClient(credentials)
+        return self._client
+
+    def reset(self) -> None:
+        """Reset client instance (useful for testing)."""
+        self._client = None
+
+
+# Single instance for the server - can be replaced in tests
+_client_manager = GmailClientManager()
 
 
 def get_gmail_client() -> GmailClient:
-    """Get or create Gmail client with credentials.
+    """Get Gmail client instance.
 
     Returns:
         Authenticated GmailClient instance.
     """
-    global _gmail_client
-    if _gmail_client is None:
-        settings = get_settings()
-        credentials = get_credentials(settings.credentials_path, settings.token_path)
-        _gmail_client = GmailClient(credentials)
-    return _gmail_client
+    return _client_manager.get_client()
 
 
 @mcp.tool(
@@ -56,6 +74,13 @@ async def get_unread_emails(
             description="Gmail labels to filter by (default: INBOX). Example: ['INBOX', 'IMPORTANT']",
         ),
     ] = None,
+    page_token: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="Pagination token from previous call's next_page_token to fetch next page",
+        ),
+    ] = None,
 ) -> UnreadEmailsResult:
     """Fetch unread emails from Gmail.
 
@@ -67,14 +92,18 @@ async def get_unread_emails(
     - thread_id: Thread ID (use with create_draft_reply)
 
     Use thread_id and email_id with create_draft_reply to respond to emails.
+    Use next_page_token with page_token parameter to fetch additional pages.
     """
     client = get_gmail_client()
-    emails, has_more = await client.get_unread_emails(max_results=max_results, label_ids=labels)
+    emails, has_more, next_page_token = await client.get_unread_emails(
+        max_results=max_results, label_ids=labels, page_token=page_token
+    )
 
     return UnreadEmailsResult(
         emails=emails,
         total_count=len(emails),
         has_more=has_more,
+        next_page_token=next_page_token,
     )
 
 
@@ -110,7 +139,7 @@ async def create_draft_reply(
         ),
     ],
     to_address: Annotated[
-        str,
+        EmailStr,
         Field(description="Email address to send the reply to (usually the original sender)"),
     ],
 ) -> DraftReplyResult:

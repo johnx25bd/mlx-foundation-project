@@ -1,6 +1,8 @@
 """Gmail API client wrapper."""
 
+import asyncio
 import base64
+import logging
 import re
 from datetime import datetime
 from email.mime.text import MIMEText
@@ -9,8 +11,47 @@ from typing import Any
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import Resource, build
+from googleapiclient.errors import HttpError
+from googleapiclient.http import BatchHttpRequest
 
+from gmail_mcp.gmail.exceptions import (
+    GmailAPIError,
+    GmailMessageNotFoundError,
+    GmailPermissionError,
+    GmailQuotaExceededError,
+)
 from gmail_mcp.gmail.models import DraftReplyResult, EmailSummary
+
+logger = logging.getLogger(__name__)
+
+# Pre-compiled regex patterns for header parsing
+_NAME_PATTERN = re.compile(r'"?([^"<]+)"?\s*<')
+_EMAIL_PATTERN = re.compile(r"<([^>]+)>")
+
+
+def _convert_http_error(error: HttpError, context: str = "") -> GmailAPIError:
+    """Convert Google API HttpError to domain-specific exception.
+
+    Args:
+        error: The HttpError from Google API.
+        context: Additional context for the error message.
+
+    Returns:
+        Appropriate GmailAPIError subclass.
+    """
+    status = error.resp.status if error.resp else None
+
+    if status == 404:
+        return GmailMessageNotFoundError(context or "unknown")
+    elif status == 403:
+        return GmailPermissionError(context or "Gmail operation")
+    elif status == 429:
+        return GmailQuotaExceededError()
+    else:
+        message = f"Gmail API error: {error}"
+        if context:
+            message = f"{context}: {error}"
+        return GmailAPIError(message, status_code=status)
 
 
 class GmailClient:
@@ -28,49 +69,98 @@ class GmailClient:
         self,
         max_results: int = 10,
         label_ids: list[str] | None = None,
-    ) -> tuple[list[EmailSummary], bool]:
+        page_token: str | None = None,
+    ) -> tuple[list[EmailSummary], bool, str | None]:
         """Fetch unread emails with summaries.
 
         Args:
             max_results: Maximum number of emails to return.
             label_ids: Gmail labels to filter by (default: INBOX).
+            page_token: Token for pagination (from previous call).
 
         Returns:
-            Tuple of (list of email summaries, has_more flag).
+            Tuple of (list of email summaries, has_more flag, next_page_token).
         """
+        # Run blocking API calls in thread pool to not block event loop
+        return await asyncio.to_thread(
+            self._get_unread_emails_sync, max_results, label_ids, page_token
+        )
+
+    def _get_unread_emails_sync(
+        self,
+        max_results: int,
+        label_ids: list[str] | None,
+        page_token: str | None,
+    ) -> tuple[list[EmailSummary], bool, str | None]:
+        """Synchronous implementation of get_unread_emails."""
         labels = label_ids or ["INBOX"]
 
         # List unread messages
-        results = (
-            self._service.users()
-            .messages()
-            .list(
-                userId="me",
-                q="is:unread",
-                labelIds=labels,
-                maxResults=max_results,
-            )
-            .execute()
-        )
+        list_params: dict[str, Any] = {
+            "userId": "me",
+            "q": "is:unread",
+            "labelIds": labels,
+            "maxResults": max_results,
+        }
+        if page_token:
+            list_params["pageToken"] = page_token
+
+        try:
+            results = self._service.users().messages().list(**list_params).execute()
+        except HttpError as e:
+            logger.error("Failed to list messages: %s", e)
+            raise _convert_http_error(e, "list messages") from e
 
         messages = results.get("messages", [])
         has_more = "nextPageToken" in results
+        next_page_token = results.get("nextPageToken")
 
-        emails: list[EmailSummary] = []
+        if not messages:
+            return [], has_more, next_page_token
+
+        # Use batch request to fetch all messages in 1-2 API calls (vs N+1)
+        # Gmail batch API supports up to 100 requests per batch
+        fetched_messages: dict[str, dict[str, Any]] = {}
+        batch_errors: list[tuple[str, Exception]] = []
+
+        def message_callback(
+            request_id: str, response: dict[str, Any], exception: Exception | None
+        ) -> None:
+            if exception is None:
+                fetched_messages[request_id] = response
+            else:
+                batch_errors.append((request_id, exception))
+
+        batch: BatchHttpRequest = self._service.new_batch_http_request(callback=message_callback)
         for msg in messages:
-            full_msg = (
+            batch.add(
                 self._service.users()
                 .messages()
                 .get(
                     userId="me",
                     id=msg["id"],
                     format="full",
-                )
-                .execute()
+                ),
+                request_id=msg["id"],
             )
-            emails.append(self._parse_message(full_msg))
 
-        return emails, has_more
+        try:
+            batch.execute()
+        except HttpError as e:
+            logger.error("Batch request failed: %s", e)
+            raise _convert_http_error(e, "batch fetch messages") from e
+
+        # Log any individual message fetch errors (but don't fail the whole request)
+        for msg_id, error in batch_errors:
+            logger.warning("Failed to fetch message %s: %s", msg_id, error)
+
+        # Parse messages in original order
+        emails: list[EmailSummary] = []
+        for msg in messages:
+            if msg["id"] in fetched_messages:
+                emails.append(self._parse_message(fetched_messages[msg["id"]]))
+
+        return emails, has_more, next_page_token
 
     async def create_draft_reply(
         self,
@@ -98,18 +188,41 @@ class GmailClient:
         Returns:
             DraftReplyResult with draft details.
         """
-        # Get original message for Message-ID header
-        original = (
-            self._service.users()
-            .messages()
-            .get(
-                userId="me",
-                id=original_message_id,
-                format="metadata",
-                metadataHeaders=["Message-ID"],
-            )
-            .execute()
+        # Run blocking API calls in thread pool to not block event loop
+        return await asyncio.to_thread(
+            self._create_draft_reply_sync,
+            thread_id,
+            original_message_id,
+            reply_body,
+            original_subject,
+            to_address,
         )
+
+    def _create_draft_reply_sync(
+        self,
+        thread_id: str,
+        original_message_id: str,
+        reply_body: str,
+        original_subject: str,
+        to_address: str,
+    ) -> DraftReplyResult:
+        """Synchronous implementation of create_draft_reply."""
+        # Get original message for Message-ID header
+        try:
+            original = (
+                self._service.users()
+                .messages()
+                .get(
+                    userId="me",
+                    id=original_message_id,
+                    format="metadata",
+                    metadataHeaders=["Message-ID"],
+                )
+                .execute()
+            )
+        except HttpError as e:
+            logger.error("Failed to get original message %s: %s", original_message_id, e)
+            raise _convert_http_error(e, original_message_id) from e
 
         original_msg_id_header = self._get_header(original, "Message-ID")
 
@@ -132,13 +245,16 @@ class GmailClient:
 
         draft_body = {"message": {"raw": raw, "threadId": thread_id}}
 
-        draft = self._service.users().drafts().create(userId="me", body=draft_body).execute()
+        try:
+            draft = self._service.users().drafts().create(userId="me", body=draft_body).execute()
+        except HttpError as e:
+            logger.error("Failed to create draft in thread %s: %s", thread_id, e)
+            raise _convert_http_error(e, "create draft") from e
 
         return DraftReplyResult(
             draft_id=draft["id"],
             thread_id=thread_id,
             message_id=draft["message"]["id"],
-            success=True,
         )
 
     def _parse_message(self, msg: dict[str, Any]) -> EmailSummary:
@@ -162,7 +278,7 @@ class GmailClient:
             sender_name=sender_name,
             subject=headers.get("Subject", "(no subject)"),
             snippet=msg.get("snippet", ""),
-            body_preview=self._extract_body(msg["payload"])[:500],
+            body_preview=self._extract_body(msg["payload"], max_chars=500),
             received_at=self._parse_date(headers.get("Date", "")),
             has_attachments=self._has_attachments(msg["payload"]),
             labels=msg.get("labelIds", []),
@@ -193,7 +309,7 @@ class GmailClient:
             Display name or None.
         """
         # Format: "Display Name <email@example.com>" or just "email@example.com"
-        match = re.match(r'"?([^"<]+)"?\s*<', from_header)
+        match = _NAME_PATTERN.match(from_header)
         if match:
             return match.group(1).strip()
         return None
@@ -207,37 +323,50 @@ class GmailClient:
         Returns:
             Email address.
         """
-        match = re.search(r"<([^>]+)>", from_header)
+        match = _EMAIL_PATTERN.search(from_header)
         if match:
             return match.group(1)
         # If no angle brackets, assume the whole thing is an email
         return from_header.strip()
 
-    def _extract_body(self, payload: dict[str, Any]) -> str:
+    def _extract_body(self, payload: dict[str, Any], max_chars: int = 500) -> str:
         """Extract plain text body from message payload.
 
         Args:
             payload: Message payload from Gmail API.
+            max_chars: Maximum characters to return (default 500).
 
         Returns:
-            Decoded body text.
+            Decoded body text, truncated to max_chars.
         """
+        # Only decode enough base64 to get max_chars of text
+        # Base64 expands by ~33%, UTF-8 can be up to 4 bytes/char
+        # Use generous limit to ensure we get enough characters
+        max_base64_bytes = max_chars * 6
+
         # Check for direct body data
-        if payload.get("body", {}).get("data"):
-            return base64.urlsafe_b64decode(payload["body"]["data"]).decode(
-                "utf-8", errors="replace"
-            )
+        body_data = payload.get("body", {}).get("data", "")
+        if body_data:
+            # Truncate base64 data before decoding to avoid processing huge emails
+            truncated = body_data[:max_base64_bytes]
+            # Ensure we truncate at a valid base64 boundary (multiple of 4)
+            truncated = truncated[: len(truncated) - (len(truncated) % 4)]
+            if truncated:
+                return base64.urlsafe_b64decode(truncated).decode("utf-8", errors="replace")
 
         # Check parts for text/plain
         for part in payload.get("parts", []):
             if part.get("mimeType") == "text/plain":
                 data = part.get("body", {}).get("data", "")
                 if data:
-                    return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+                    truncated = data[:max_base64_bytes]
+                    truncated = truncated[: len(truncated) - (len(truncated) % 4)]
+                    if truncated:
+                        return base64.urlsafe_b64decode(truncated).decode("utf-8", errors="replace")
 
             # Recursively check nested parts
             if part.get("parts"):
-                result = self._extract_body(part)
+                result = self._extract_body(part, max_chars)
                 if result:
                     return result
 

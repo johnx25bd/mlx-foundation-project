@@ -1,5 +1,6 @@
 """Configuration management for Gmail MCP server."""
 
+from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -28,6 +29,10 @@ class Settings(BaseSettings):
     default_max_results: int = 10
 
 
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Get settings instance."""
+    """Get cached settings instance.
+
+    Uses lru_cache to avoid re-parsing environment/files on each call.
+    """
     return Settings()
