@@ -274,7 +274,7 @@ class GmailClient:
             sender_name=sender_name,
             subject=headers.get("Subject", "(no subject)"),
             snippet=msg.get("snippet", ""),
-            body_preview=self._extract_body(msg["payload"])[:500],
+            body_preview=self._extract_body(msg["payload"], max_chars=500),
             received_at=self._parse_date(headers.get("Date", "")),
             has_attachments=self._has_attachments(msg["payload"]),
             labels=msg.get("labelIds", []),
@@ -325,31 +325,46 @@ class GmailClient:
         # If no angle brackets, assume the whole thing is an email
         return from_header.strip()
 
-    def _extract_body(self, payload: dict[str, Any]) -> str:
+    def _extract_body(self, payload: dict[str, Any], max_chars: int = 500) -> str:
         """Extract plain text body from message payload.
 
         Args:
             payload: Message payload from Gmail API.
+            max_chars: Maximum characters to return (default 500).
 
         Returns:
-            Decoded body text.
+            Decoded body text, truncated to max_chars.
         """
+        # Only decode enough base64 to get max_chars of text
+        # Base64 expands by ~33%, UTF-8 can be up to 4 bytes/char
+        # Use generous limit to ensure we get enough characters
+        max_base64_bytes = max_chars * 6
+
         # Check for direct body data
-        if payload.get("body", {}).get("data"):
-            return base64.urlsafe_b64decode(payload["body"]["data"]).decode(
-                "utf-8", errors="replace"
-            )
+        body_data = payload.get("body", {}).get("data", "")
+        if body_data:
+            # Truncate base64 data before decoding to avoid processing huge emails
+            truncated = body_data[:max_base64_bytes]
+            # Ensure we truncate at a valid base64 boundary (multiple of 4)
+            truncated = truncated[: len(truncated) - (len(truncated) % 4)]
+            if truncated:
+                return base64.urlsafe_b64decode(truncated).decode("utf-8", errors="replace")
 
         # Check parts for text/plain
         for part in payload.get("parts", []):
             if part.get("mimeType") == "text/plain":
                 data = part.get("body", {}).get("data", "")
                 if data:
-                    return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+                    truncated = data[:max_base64_bytes]
+                    truncated = truncated[: len(truncated) - (len(truncated) % 4)]
+                    if truncated:
+                        return base64.urlsafe_b64decode(truncated).decode(
+                            "utf-8", errors="replace"
+                        )
 
             # Recursively check nested parts
             if part.get("parts"):
-                result = self._extract_body(part)
+                result = self._extract_body(part, max_chars)
                 if result:
                     return result
 
