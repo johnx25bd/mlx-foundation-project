@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import logging
 import re
 from datetime import datetime
 from email.mime.text import MIMEText
@@ -10,13 +11,47 @@ from typing import Any
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import Resource, build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import BatchHttpRequest
 
+from gmail_mcp.gmail.exceptions import (
+    GmailAPIError,
+    GmailMessageNotFoundError,
+    GmailPermissionError,
+    GmailQuotaExceededError,
+)
 from gmail_mcp.gmail.models import DraftReplyResult, EmailSummary
+
+logger = logging.getLogger(__name__)
 
 # Pre-compiled regex patterns for header parsing
 _NAME_PATTERN = re.compile(r'"?([^"<]+)"?\s*<')
 _EMAIL_PATTERN = re.compile(r"<([^>]+)>")
+
+
+def _convert_http_error(error: HttpError, context: str = "") -> GmailAPIError:
+    """Convert Google API HttpError to domain-specific exception.
+
+    Args:
+        error: The HttpError from Google API.
+        context: Additional context for the error message.
+
+    Returns:
+        Appropriate GmailAPIError subclass.
+    """
+    status = error.resp.status if error.resp else None
+
+    if status == 404:
+        return GmailMessageNotFoundError(context or "unknown")
+    elif status == 403:
+        return GmailPermissionError(context or "Gmail operation")
+    elif status == 429:
+        return GmailQuotaExceededError()
+    else:
+        message = f"Gmail API error: {error}"
+        if context:
+            message = f"{context}: {error}"
+        return GmailAPIError(message, status_code=status)
 
 
 class GmailClient:
@@ -70,7 +105,11 @@ class GmailClient:
         if page_token:
             list_params["pageToken"] = page_token
 
-        results = self._service.users().messages().list(**list_params).execute()
+        try:
+            results = self._service.users().messages().list(**list_params).execute()
+        except HttpError as e:
+            logger.error("Failed to list messages: %s", e)
+            raise _convert_http_error(e, "list messages") from e
 
         messages = results.get("messages", [])
         has_more = "nextPageToken" in results
@@ -82,10 +121,13 @@ class GmailClient:
         # Use batch request to fetch all messages in 1-2 API calls (vs N+1)
         # Gmail batch API supports up to 100 requests per batch
         fetched_messages: dict[str, dict[str, Any]] = {}
+        batch_errors: list[tuple[str, Exception]] = []
 
         def message_callback(request_id: str, response: dict[str, Any], exception: Exception | None) -> None:
             if exception is None:
                 fetched_messages[request_id] = response
+            else:
+                batch_errors.append((request_id, exception))
 
         batch: BatchHttpRequest = self._service.new_batch_http_request(callback=message_callback)
         for msg in messages:
@@ -97,7 +139,16 @@ class GmailClient:
                 ),
                 request_id=msg["id"],
             )
-        batch.execute()
+
+        try:
+            batch.execute()
+        except HttpError as e:
+            logger.error("Batch request failed: %s", e)
+            raise _convert_http_error(e, "batch fetch messages") from e
+
+        # Log any individual message fetch errors (but don't fail the whole request)
+        for msg_id, error in batch_errors:
+            logger.warning("Failed to fetch message %s: %s", msg_id, error)
 
         # Parse messages in original order
         emails: list[EmailSummary] = []
@@ -153,17 +204,21 @@ class GmailClient:
     ) -> DraftReplyResult:
         """Synchronous implementation of create_draft_reply."""
         # Get original message for Message-ID header
-        original = (
-            self._service.users()
-            .messages()
-            .get(
-                userId="me",
-                id=original_message_id,
-                format="metadata",
-                metadataHeaders=["Message-ID"],
+        try:
+            original = (
+                self._service.users()
+                .messages()
+                .get(
+                    userId="me",
+                    id=original_message_id,
+                    format="metadata",
+                    metadataHeaders=["Message-ID"],
+                )
+                .execute()
             )
-            .execute()
-        )
+        except HttpError as e:
+            logger.error("Failed to get original message %s: %s", original_message_id, e)
+            raise _convert_http_error(e, original_message_id) from e
 
         original_msg_id_header = self._get_header(original, "Message-ID")
 
@@ -186,7 +241,11 @@ class GmailClient:
 
         draft_body = {"message": {"raw": raw, "threadId": thread_id}}
 
-        draft = self._service.users().drafts().create(userId="me", body=draft_body).execute()
+        try:
+            draft = self._service.users().drafts().create(userId="me", body=draft_body).execute()
+        except HttpError as e:
+            logger.error("Failed to create draft in thread %s: %s", thread_id, e)
+            raise _convert_http_error(e, "create draft") from e
 
         return DraftReplyResult(
             draft_id=draft["id"],
